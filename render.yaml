@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: pedidos-app
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn pedidos:app
+    envVars:
+      - key: PEDIDOS_SECRET_KEY
+        generateValue: true
+      - key: PEDIDOS_STORAGE_DIR
+        value: /var/pedidos
+    disk:
+      name: pedidos-data
+      mountPath: /var/pedidos
+      sizeGB: 1

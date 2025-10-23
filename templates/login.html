@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+
+{% block title %}Login - Sistema de Pedidos{% endblock %}
+{% block body_class %}auth-body{% endblock %}
+
+{% block content %}
+<div class="auth-wrapper">
+  <div class="auth-card">
+    <h1>Sistema de Pedidos</h1>
+    <p class="auth-subtitle">Acesse com usuario e senha</p>
+    {% if error %}
+      <div class="alert alert-error">{{ error }}</div>
+    {% endif %}
+    <form method="post" class="auth-form">
+      <label for="username">Usuario</label>
+      <input id="username" name="username" autocomplete="username" required autofocus>
+
+      <label for="password">Senha</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+
+      <button type="submit" class="btn primary full">Entrar</button>
+    </form>
+  </div>
+</div>
+{% endblock %}
