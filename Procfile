@@ -1,1 +1,1 @@
-web: gunicorn pedidos:app
+web: gunicorn your_application.wsgi:application

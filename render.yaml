@@ -2,8 +2,9 @@ services:
   - type: web
     name: pedidos-app
     env: python
+    plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn pedidos:app
+    startCommand: gunicorn your_application.wsgi:application
     envVars:
       - key: PEDIDOS_SECRET_KEY
         generateValue: true

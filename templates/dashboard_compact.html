@@ -1,0 +1,86 @@
+{% extends 'bootstrap_base.html' %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h3>Dashboard</h3>
+  <div>
+    <a class="btn btn-success" href="#" id="btn-new-order">Novo pedido</a>
+  </div>
+</div>
+
+<div class="row">
+  <div class="col-md-4">
+    <div class="card mb-3">
+      <div class="card-body">
+        <h5 class="card-title">Fornecedores</h5>
+        <ul id="supplier-list" class="list-group list-group-flush small"></ul>
+        <div class="mt-2 d-flex">
+          <input id="new-supplier" class="form-control form-control-sm me-2" placeholder="Novo fornecedor">
+          <button type="button" id="add-supplier" class="btn btn-sm btn-outline-primary">Adicionar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-8">
+    <div class="card">
+      <div class="card-body">
+        <h5 class="card-title">Pedidos recentes</h5>
+        <div id="orders-table"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="orderModal" tabindex="-1">
+  <div class="modal-dialog modal-xl modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Criar pedido</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <form id="order-form">
+          <div class="mb-3">
+            <label for="order-fornecedor" class="form-label">Fornecedor</label>
+            <select id="order-fornecedor" class="form-select" required></select>
+          </div>
+          <div>
+            <table class="table table-sm" id="items-table">
+              <thead>
+                <tr>
+                  <th>Qtd</th>
+                  <th>Prefixo</th>
+                  <th>Codigo</th>
+                  <th>Descricao</th>
+                  <th>Valor</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+            <div class="d-flex">
+              <button type="button" id="add-item" class="btn btn-sm btn-outline-secondary me-2">Adicionar linha</button>
+              <small class="text-muted align-self-center">Preencha ao menos 1 item valido</small>
+            </div>
+          </div>
+        </form>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+        <button type="button" id="save-order" class="btn btn-primary">Salvar pedido</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/dashboard_compact.js') }}"></script>
+<script>
+  document.addEventListener('DOMContentLoaded', function () {
+    if (window.dashboardCompact && typeof window.dashboardCompact.init === 'function') {
+      window.dashboardCompact.init();
+    }
+  });
+</script>
+{% endblock %}
