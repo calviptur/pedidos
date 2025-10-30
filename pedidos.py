@@ -1,4 +1,5 @@
-﻿import os
+# app.py
+import os
 import shutil
 import logging
 import traceback
@@ -6,6 +7,7 @@ from decimal import Decimal
 from datetime import datetime, timedelta
 from functools import wraps
 from pathlib import Path
+from urllib.parse import urlparse, ParseResult, urlunparse, quote_plus
 
 from flask import (
     Flask,
@@ -25,7 +27,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy import func, text
 from sqlalchemy.orm import selectinload
 
-
 # =====================================================
 # CONFIGURACAO DE PASTAS E BANCO
 # =====================================================
@@ -33,9 +34,35 @@ ROOT_DIR = Path(__file__).resolve().parent
 
 
 def _normalize_db_url(url: str | None) -> str | None:
-    if url and url.startswith("postgres://"):
+    if not url:
+        return None
+    # Aceita postgres:// e transforma em postgresql:// para compatibilidade
+    if url.startswith("postgres://"):
         return url.replace("postgres://", "postgresql://", 1)
     return url
+
+
+def _build_postgres_url_from_parts() -> str | None:
+    user = os.environ.get("POSTGRES_USER") or os.environ.get("PGUSER")
+    password = os.environ.get("POSTGRES_PASSWORD") or os.environ.get("PGPASSWORD")
+    db = os.environ.get("POSTGRES_DB") or os.environ.get("PGDATABASE")
+    host = os.environ.get("POSTGRES_HOST") or os.environ.get("PGHOST")
+    port = os.environ.get("POSTGRES_PORT") or os.environ.get("PGPORT")
+    sslmode = os.environ.get("POSTGRES_SSLMODE") or os.environ.get("PGSSLMODE")
+    if not (user and password and db and host):
+        return None
+
+    user_quoted = quote_plus(user)
+    password_quoted = quote_plus(password)
+    netloc = f"{user_quoted}:{password_quoted}@{host}"
+    if port:
+        netloc = f"{netloc}:{port}"
+    path = f"/{db}"
+    query = ""
+    if sslmode:
+        query = f"sslmode={sslmode}"
+    parsed = ParseResult(scheme="postgresql", netloc=netloc, path=path, params="", query=query, fragment="")
+    return urlunparse(parsed)
 
 
 STORAGE_ROOT = Path(
@@ -58,12 +85,33 @@ def _default_sqlite_path() -> Path:
     return db_path
 
 
-DB_URL = _normalize_db_url(os.environ.get("DATABASE_URL"))
-if DB_URL:
-    DATABASE_URI = DB_URL
-else:
+# ---------- DADOS DO SEU POSTGRES (fallback)
+# Essas informações vieram do seu Render — usadas apenas se DATABASE_URL não estiver definida.
+RENDER_EXTERNAL_DB = (
+    "postgresql://pedidos_db_ihvt_user:M8il2h2WH7OxTCvQ5FQkKMxylVuEzPhd"
+    "@dpg-d416uiqli9vc739ftdbg-a.oregon-postgres.render.com/pedidos_db_ihvt"
+)
+
+# Prefer DATABASE_URL em variáveis de ambiente (Render geralmente fornece DATABASE_URL).
+ENV_DB_URL = os.environ.get("DATABASE_URL") or os.environ.get("RENDER_DATABASE_URL") or os.environ.get("POSTGRES_URL")
+DB_URL = _normalize_db_url(ENV_DB_URL) if ENV_DB_URL else None
+
+if not DB_URL:
+    # tenta construir a partir de partes (se definidas)
+    built = _build_postgres_url_from_parts()
+    if built:
+        DB_URL = built
+
+# Se ainda não existir, usar o fallback com suas credenciais (mas preferível definir DATABASE_URL no painel).
+if not DB_URL:
+    DB_URL = _normalize_db_url(RENDER_EXTERNAL_DB)
+
+# Se DB_URL ainda for None (improvável), cai para sqlite local.
+if not DB_URL:
     _sqlite_path = _default_sqlite_path()
     DATABASE_URI = f"sqlite:///{_sqlite_path}"
+else:
+    DATABASE_URI = DB_URL
 
 modelo_default = ROOT_DIR / "modelo_pedido.xlsm"
 MODELO_PATH = Path(os.environ.get("PEDIDOS_MODELO_PATH") or modelo_default)
@@ -107,6 +155,23 @@ app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=8)
 
 app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URI
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
+# Se for PostgreSQL e não tiver sslmode na query, passa connect_args sslmode=require
+try:
+    parsed = urlparse(DATABASE_URI)
+    scheme = parsed.scheme or ""
+    if scheme.startswith("postgres") or scheme.startswith("postgresql"):
+        if "sslmode=" not in (parsed.query or ""):
+            app.config.setdefault("SQLALCHEMY_ENGINE_OPTIONS", {})
+            engine_opts = app.config["SQLALCHEMY_ENGINE_OPTIONS"]
+            if "connect_args" not in engine_opts:
+                engine_opts["connect_args"] = {"sslmode": "require"}
+            else:
+                engine_opts["connect_args"].setdefault("sslmode", "require")
+            app.config["SQLALCHEMY_ENGINE_OPTIONS"] = engine_opts
+except Exception:
+    pass
+
 db = SQLAlchemy(app)
 
 logging.basicConfig(level=logging.INFO)
@@ -224,6 +289,7 @@ def _serialize_user(user: User | None) -> dict | None:
 # USUARIOS
 # =====================================================
 def garantir_usuarios_iniciais():
+    # SENHA PADRAO "1234" conforme solicitado
     defaults = [
         ("MIGUEL", "1234", "creator"),
         ("MICHEL", "1234", "approver"),
@@ -361,6 +427,7 @@ def purge_old_pedidos(days: int = 135) -> int:
 
 
 def normalize_items(items):
+    # exige pelo menos 1 item valido
     if not isinstance(items, list) or not items:
         raise ValueError("Adicione pelo menos um item")
     normalized = []
@@ -970,6 +1037,7 @@ PURGED_ON_START = 0
 def _initialize_app():
     global PURGED_ON_START
     with app.app_context():
+        # cria as tabelas automaticamente no banco (Postgres) e garante usuarios
         db.create_all()
         garantir_usuarios_iniciais()
         PURGED_ON_START = purge_old_pedidos()
