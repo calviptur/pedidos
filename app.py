@@ -96,18 +96,21 @@ RENDER_EXTERNAL_DB = (
 ENV_DB_URL = os.environ.get("DATABASE_URL") or os.environ.get("RENDER_DATABASE_URL") or os.environ.get("POSTGRES_URL")
 DB_URL = _normalize_db_url(ENV_DB_URL) if ENV_DB_URL else None
 
-if not DB_URL:
+force_sqlite_env = os.environ.get("PEDIDOS_FORCE_SQLITE", "")
+FORCE_SQLITE = force_sqlite_env.strip().lower() in {"1", "true", "yes", "on"}
+
+if not DB_URL and not FORCE_SQLITE:
     # tenta construir a partir de partes (se definidas)
     built = _build_postgres_url_from_parts()
     if built:
         DB_URL = built
 
-# Se ainda não existir, usar o fallback com suas credenciais (mas preferível definir DATABASE_URL no painel).
-if not DB_URL:
+# Se ainda nǜa existir, usar o fallback com suas credenciais (mas preferĕvel definir DATABASE_URL no painel).
+if not DB_URL and not FORCE_SQLITE:
     DB_URL = _normalize_db_url(RENDER_EXTERNAL_DB)
 
-# Se DB_URL ainda for None (improvável), cai para sqlite local.
-if not DB_URL:
+# Se DB_URL ainda for None (improvǕvel) ou houver forǐ3o para sqlite, cai para sqlite local.
+if not DB_URL or FORCE_SQLITE:
     _sqlite_path = _default_sqlite_path()
     DATABASE_URI = f"sqlite:///{_sqlite_path}"
 else:
@@ -275,8 +278,11 @@ def roles_required(*roles):
 
 
 def _is_password_hashed(value: str | None) -> bool:
-    value = value or ""
-    return value.startswith("pbkdf2:")
+    value = (value or "").strip()
+    if not value:
+        return False
+    known_prefixes = ("pbkdf2:", "scrypt:", "sha256$", "sha1$")
+    return value.startswith(known_prefixes)
 
 
 def _serialize_user(user: User | None) -> dict | None:
@@ -326,10 +332,13 @@ def verificar_login(username: str, password: str) -> dict | None:
     if not user:
         return None
     stored = user.password or ""
-    if _is_password_hashed(stored):
-        if check_password_hash(stored, password):
-            return _serialize_user(user)
-    elif stored == password:
+    if stored:
+        try:
+            if check_password_hash(stored, password):
+                return _serialize_user(user)
+        except (TypeError, ValueError):
+            pass
+    if stored == password:
         user.password = generate_password_hash(password)
         try:
             db.session.commit()
