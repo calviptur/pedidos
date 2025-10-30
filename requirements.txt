@@ -1,5 +1,6 @@
-Flask
-Flask-SQLAlchemy
-psycopg2-binary
-openpyxl
-Werkzeug
+Flask==3.0.3
+psycopg2-binary==2.9.9
+gunicorn==23.0.0
+Werkzeug==3.0.4
+openpyxl==3.1.5
+python-dotenv==1.0.1
