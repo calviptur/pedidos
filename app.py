@@ -3,7 +3,7 @@ import os
 import shutil
 import logging
 import traceback
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from datetime import datetime, timedelta
 from functools import wraps
 from pathlib import Path
@@ -12,6 +12,7 @@ from urllib.parse import urlparse, ParseResult, urlunparse, quote_plus
 from flask import (
     Flask,
     abort,
+    flash,
     jsonify,
     redirect,
     render_template,
@@ -126,6 +127,9 @@ if not MODELO_PATH.exists():
         legacy_modelo = ROOT_DIR.parent / "modelo_pedido.xlsm"
         if legacy_modelo.exists():
             MODELO_PATH = legacy_modelo
+
+LC_WORKBOOK_FILENAME = os.environ.get("PEDIDOS_LC_FILENAME") or "LC.xlsx"
+LC_WORKBOOK_OVERRIDE = os.environ.get("PEDIDOS_LC_PATH")
 
 PASTA_PEDIDOS_GERADOS = Path(
     os.environ.get("PEDIDOS_GERADOS_DIR") or (STORAGE_ROOT / "Pedidos Gerados")
@@ -545,6 +549,141 @@ def create_pending_order(fornecedor: str, items, creator: str | None):
     return pedido.id
 
 
+def _resolve_lc_workbook_path() -> Path | None:
+    candidates: list[Path] = []
+    if LC_WORKBOOK_OVERRIDE:
+        candidates.append(Path(LC_WORKBOOK_OVERRIDE).expanduser())
+
+    default_name = LC_WORKBOOK_FILENAME
+    for base in (ROOT_DIR, ROOT_DIR.parent, STORAGE_ROOT):
+        candidates.append((Path(base) / default_name).expanduser())
+
+    seen: set[Path] = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve(strict=True)
+        except FileNotFoundError:
+            try:
+                resolved = candidate.resolve(strict=False)
+            except FileNotFoundError:
+                resolved = candidate
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if resolved.exists():
+            return resolved
+    return None
+
+
+def _ensure_supplier_exists(nome: str) -> str:
+    registro = (
+        Fornecedor.query.filter(func.upper(Fornecedor.nome) == nome.upper())
+        .limit(1)
+        .one_or_none()
+    )
+    if registro:
+        return registro.nome
+    try:
+        return add_supplier(nome)
+    except ValueError:
+        registro = (
+            Fornecedor.query.filter(func.upper(Fornecedor.nome) == nome.upper())
+            .limit(1)
+            .one_or_none()
+        )
+        if registro:
+            return registro.nome
+        raise
+
+
+def _coerce_positive_int(value):
+    if value in (None, "", 0, "0", 0.0):
+        return None, False
+    try:
+        numero = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None, True
+    if numero <= 0:
+        return None, True
+    if numero != numero.to_integral_value():
+        return None, True
+    quantidade = int(numero)
+    if quantidade <= 0:
+        return None, True
+    return quantidade, False
+
+
+def generate_automatic_orders_from_workbook(creator: str | None):
+    workbook_path = _resolve_lc_workbook_path()
+    if not workbook_path:
+        raise FileNotFoundError(
+            "Planilha LC.xlsx não encontrada. Defina PEDIDOS_LC_PATH ou coloque o arquivo na pasta do projeto."
+        )
+
+    try:
+        workbook = load_workbook(workbook_path, data_only=True)
+    except Exception as exc:
+        raise RuntimeError(f"Não foi possível abrir {workbook_path.name}: {exc}") from exc
+
+    worksheet = workbook.active
+    supplier_name = _ensure_supplier_exists("Automatico")
+    created = 0
+    warnings: list[str] = []
+
+    max_row = worksheet.max_row or 0
+    for row_idx in range(2, max_row + 1):
+        raw_quantity = worksheet.cell(row=row_idx, column=3).value
+        quantidade, invalid_quantity = _coerce_positive_int(raw_quantity)
+        if invalid_quantity:
+            warnings.append(f"Linha {row_idx}: quantidade inválida ({raw_quantity!r}).")
+            continue
+        if quantidade is None:
+            continue
+
+        values = []
+        for col_idx in range(9, 22):
+            cell_value = worksheet.cell(row=row_idx, column=col_idx).value
+            if cell_value in (None, "", 0, 0.0):
+                continue
+            text = str(cell_value).strip()
+            if text:
+                values.append(text)
+
+        if not values:
+            warnings.append(f"Linha {row_idx}: nenhuma informação encontrada nas colunas I-U.")
+            continue
+
+        descricao = ", ".join(values)
+        item_codigo = f"AUTO-{row_idx:04d}"
+        item_payload = [
+            {
+                "quantidade": quantidade,
+                "codigo": item_codigo,
+                "descricao": descricao,
+                "prefixo": "",
+                "valor": 0,
+                "estoque": None,
+            }
+        ]
+
+        try:
+            create_pending_order(supplier_name, item_payload, creator)
+            created += 1
+        except ValueError as exc:
+            warnings.append(f"Linha {row_idx}: {exc}")
+        except Exception as exc:
+            warnings.append(f"Linha {row_idx}: erro inesperado ({exc}).")
+            logger.exception("Falha ao criar pedido automático para linha %s", row_idx)
+
+    return {
+        "created": created,
+        "warnings": warnings,
+        "workbook": workbook_path,
+    }
+
+
+
+
 def list_orders(fornecedor: str | None = None, status: str | None = None):
     query = Pedido.query
     if fornecedor:
@@ -817,6 +956,35 @@ def logout():
 @login_required
 def dashboard():
     return render_template("dashboard.html", user=current_user())
+
+
+@app.route("/pedidos/automaticos", methods=["POST"])
+@login_required
+def gerar_automatico():
+    user = current_user()
+    if not user or user.get("role") != "admin":
+        flash("Apenas administradores podem gerar pedidos automáticos.", "error")
+        return redirect(url_for("dashboard"))
+
+    try:
+        result = generate_automatic_orders_from_workbook(user.get("username"))
+    except FileNotFoundError as exc:
+        flash(str(exc), "error")
+    except Exception as exc:
+        logger.exception("Erro ao gerar pedidos automáticos")
+        flash(f"Erro ao gerar pedidos automáticos: {exc}", "error")
+    else:
+        created = result.get("created", 0)
+        if created:
+            flash(
+                f"{created} pedidos automáticos foram gerados a partir de {result['workbook'].name}.",
+                "success",
+            )
+        else:
+            flash("Nenhum pedido automático foi gerado a partir da planilha.", "info")
+        for warning in result.get("warnings", []):
+            flash(warning, "error")
+    return redirect(url_for("dashboard"))
 
 
 @app.route("/dashboard/compact")

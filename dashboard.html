@@ -1,0 +1,251 @@
+{% extends "base.html" %}
+
+{% block title %}Painel - Sistema de Pedidos{% endblock %}
+{% block body_class %}dashboard-body{% endblock %}
+
+{% block content %}
+<main id="dashboard-root">
+  <header class="topbar">
+    <div class="topbar-info">
+      <h1>Sistema de Pedidos</h1>
+      <span class="chip">Usuario: {{ user.username }} • Perfil: {{ user.role }}</span>
+    </div>
+    <div class="topbar-actions">
+      <button type="button" id="change-password-btn" class="btn ghost">Alterar senha</button>
+      {% if user.role == "admin" %}
+      <button type="button" id="manage-users-btn" class="btn ghost">Usuarios</button>
+      <form action="{{ url_for('gerar_automatico') }}" method="post">
+        <button type="submit" class="btn success">Gerar pedidos automáticos</button>
+      </form>
+      {% endif %}
+      <a href="{{ url_for('logout') }}" class="btn danger">Sair</a>
+    </div>
+  </header>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  {% with messages = get_flashed_messages(with_categories=True) %}
+    {% if messages %}
+    <section class="flash-messages" aria-live="polite">
+      {% for category, message in messages %}
+      <div class="alert{% if category == 'error' %} alert-error{% elif category == 'success' %} alert-success{% elif category == 'info' %} alert-info{% endif %}">
+        {{ message }}
+      </div>
+      {% endfor %}
+    </section>
+    {% endif %}
+  {% endwith %}
+
+  <section class="dashboard-grid">
+    <section class="card" id="new-order-section">
+      <div class="card-header">
+        <h2>Novo pedido</h2>
+        <p>Monte um pedido pendente selecionando fornecedor e itens</p>
+      </div>
+      <form id="new-order-form" class="card-body" novalidate>
+        <div class="form-group">
+          <label for="supplier-select">Fornecedor</label>
+          <div class="inline-group">
+            <select id="supplier-select" required></select>
+            <button type="button" id="new-supplier-btn" class="btn secondary">Novo fornecedor</button>
+          </div>
+        </div>
+
+        <div class="items-panel">
+          <div class="items-header">
+            <h3>Itens do pedido</h3>
+            <p class="muted">Informe os dados e clique em Adicionar item</p>
+          </div>
+          <div class="item-input-grid">
+            <input id="item-quantidade" type="number" min="1" placeholder="Qtd" required>
+            <input id="item-codigo" placeholder="Codigo" required>
+            <input id="item-descricao" placeholder="Descricao" required>
+            <input id="item-prefixo" placeholder="Prefixo">
+            <input id="item-valor" type="number" step="0.01" min="0" placeholder="Valor" required>
+            <input id="item-estoque" type="number" min="0" placeholder="Estoque" required>
+            <button type="button" id="add-item-btn" class="btn primary">Adicionar item</button>
+          </div>
+          <div class="items-table-wrapper">
+            <table id="items-table" class="data-table compact">
+              <thead>
+                <tr>
+                  <th>Qtd</th>
+                  <th>Codigo</th>
+                  <th>Descricao</th>
+                  <th>Prefixo</th>
+                  <th>Valor</th>
+                  <th>Estoque</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr class="placeholder">
+                  <td colspan="7">Nenhum item adicionado ainda</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button type="submit" class="btn success">Criar pedido pendente</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="card" id="history-section">
+      <div class="card-header">
+        <h2>Pedidos</h2>
+        <p>Consulte historico, aprove, gere arquivos e edite pendentes</p>
+      </div>
+      <div class="card-body">
+        <div class="filters">
+          <label class="filter-control">
+            <span>Fornecedor</span>
+            <input id="filter-fornecedor" placeholder="Nome do fornecedor">
+          </label>
+          <label class="filter-control">
+            <span>Status</span>
+            <select id="filter-status">
+              <option value="">Todos</option>
+            </select>
+          </label>
+          <button type="button" id="apply-filters-btn" class="btn secondary">Filtrar</button>
+          <button type="button" id="clear-filters-btn" class="btn ghost">Limpar</button>
+        </div>
+
+        <div class="table-wrapper">
+          <table id="orders-table" class="data-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Fornecedor</th>
+                <th>Criado por</th>
+                <th>Data</th>
+                <th>Status</th>
+                <th>Excel</th>
+                <th>Acoes</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="placeholder">
+                <td colspan="7">Nenhum pedido encontrado</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p class="muted small" id="purge-info"></p>
+      </div>
+    </section>
+  </section>
+</main>
+
+<dialog id="order-details-dialog" class="modal">
+  <div class="modal-card">
+    <header class="modal-header">
+      <h2 id="order-details-title">Detalhes do pedido</h2>
+      <button type="button" class="icon-btn" data-close-dialog>&times;</button>
+    </header>
+    <section id="order-details-body" class="modal-body"></section>
+    <footer class="modal-footer">
+      <button type="button" class="btn" data-close-dialog>Fechar</button>
+    </footer>
+  </div>
+</dialog>
+
+<dialog id="edit-order-dialog" class="modal large">
+  <div class="modal-card">
+    <header class="modal-header">
+      <h2 id="edit-order-title">Editar pedido</h2>
+      <button type="button" class="icon-btn" data-close-dialog>&times;</button>
+    </header>
+    <section id="edit-order-body" class="modal-body"></section>
+    <footer class="modal-footer">
+      <div class="modal-footer-left">
+        <button type="button" class="btn secondary" id="edit-add-item-btn">Adicionar item</button>
+      </div>
+      <div class="modal-footer-right">
+        <button type="button" class="btn" data-close-dialog>Cancelar</button>
+        <button type="button" class="btn success" id="save-edit-order-btn">Salvar alteracoes</button>
+      </div>
+    </footer>
+  </div>
+</dialog>
+
+<dialog id="password-dialog" class="modal">
+  <div class="modal-card">
+    <header class="modal-header">
+      <h2>Atualizar senha</h2>
+      <button type="button" class="icon-btn" data-close-dialog>&times;</button>
+    </header>
+    <section class="modal-body">
+      <label for="new-password-field">Nova senha</label>
+      <input type="password" id="new-password-field" placeholder="Informe a nova senha">
+    </section>
+    <footer class="modal-footer">
+      <button type="button" class="btn" data-close-dialog>Cancelar</button>
+      <button type="button" class="btn success" id="confirm-password-btn">Atualizar</button>
+    </footer>
+  </div>
+</dialog>
+
+<dialog id="users-dialog" class="modal">
+  <div class="modal-card">
+    <header class="modal-header">
+      <h2>Usuarios</h2>
+      <button type="button" class="icon-btn" data-close-dialog>&times;</button>
+    </header>
+    <section class="modal-body">
+      <table id="users-table" class="data-table compact">
+        <thead>
+          <tr>
+            <th>Usuario</th>
+            <th>Perfil</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="placeholder">
+            <td colspan="3">Nenhum usuario cadastrado</td>
+          </tr>
+        </tbody>
+      </table>
+      <form id="new-user-form" class="inline-form">
+        <input id="new-user-username" placeholder="Usuario" required>
+        <input id="new-user-password" type="password" placeholder="Senha" required>
+        <select id="new-user-role">
+          <option value="creator">creator</option>
+          <option value="approver">approver</option>
+          <option value="admin">admin</option>
+        </select>
+        <button type="submit" class="btn success">Criar usuario</button>
+      </form>
+    </section>
+    <footer class="modal-footer">
+      <button type="button" class="btn" data-close-dialog>Fechar</button>
+    </footer>
+  </div>
+</dialog>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+  window.APP_BOOTSTRAP = {
+    user: {{ user|tojson }},
+    urls: {
+      context: "{{ url_for('api_context') }}",
+      fornecedores: "{{ url_for('api_fornecedores') }}",
+      pedidos: "{{ url_for('api_pedidos') }}",
+      pedido: "{{ url_for('api_pedido_detalhe', pedido_id=0) }}",
+      approve: "{{ url_for('api_pedido_approve', pedido_id=0) }}",
+      generate: "{{ url_for('api_pedido_generate', pedido_id=0) }}",
+      download: "{{ url_for('download_pedido', pedido_id=0) }}",
+      me_password: "{{ url_for('api_me_password') }}",
+      users: "{{ url_for('api_users') }}",
+      user_delete: "{{ url_for('api_users_delete', username='__USERNAME__') }}"
+    }
+  };
+</script>
+<script src="{{ url_for('static', filename='js/app.js') }}" defer></script>
+{% endblock %}
